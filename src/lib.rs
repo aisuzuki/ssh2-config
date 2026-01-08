@@ -251,7 +251,7 @@ mod serializer;
 // -- export
 pub use self::default_algorithms::DefaultAlgorithms;
 pub use self::host::{Host, HostClause};
-pub use self::params::{Algorithms, HostParams};
+pub use self::params::{Algorithms, AlgorithmsRule, HostParams};
 pub use self::parser::{ParseRule, SshParserError, SshParserResult};
 
 /// Describes the ssh configuration.
