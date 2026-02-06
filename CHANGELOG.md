@@ -1,6 +1,10 @@
 # Changelog
 
 - [Changelog](#changelog)
+  - [0.7.0](#070)
+  - [0.6.5](#065)
+  - [0.6.4](#064)
+  - [0.6.3](#063)
   - [0.6.2](#062)
   - [0.6.1](#061)
   - [0.6.0](#060)
@@ -23,6 +27,47 @@
 
 ---
 
+## 0.7.0
+
+Released on 31/01/2026
+
+- **BREAKING CHANGE**: Added `InvalidQuotes` variant to `SshParserError` enum
+- Multiple `IdentityFile` directives are now accumulated instead of following first-value-wins rule, matching OpenSSH
+  behavior.
+- [Issue 43](https://github.com/veeso/ssh2-config/issues/43): Parser now correctly preserves `#` characters inside
+  quoted strings instead of treating them as comments.
+- [Issue 45](https://github.com/veeso/ssh2-config/issues/45): Parser now returns an error for mismatched quotes instead
+  of silently ignoring them.
+- [Issue 44](https://github.com/veeso/ssh2-config/issues/44): Parser now handles escape sequences (`\"`, `\\`, `\'`)
+  within quoted arguments.
+- [Issue 46](https://github.com/veeso/ssh2-config/issues/46): Fixed pattern parsing to handle multiple `!` characters
+  correctly. Only a leading `!` indicates negation; subsequent `!` characters are treated as literal.
+
+## 0.6.5
+
+Released on 14/01/2026
+
+- [Issue 37](https://github.com/veeso/ssh2-config/issues/37): KEX Algorithms were invalidly extracted
+  - Also removed duplicated and invalid algorithms from the default list.
+
+## 0.6.4
+
+Released on 13/01/2026
+
+- Auto generate default supported algorithms documentation on build
+
+## 0.6.3
+
+Released on 13/01/2026
+
+- [Issue 32](https://github.com/veeso/ssh2-config/issues/32): Added missing field to serializer:
+  - `AddKeysToAgent`
+  - `ForwardAgent`
+  - `ProxyJump`
+- [Issue 33](https://github.com/veeso/ssh2-config/issues/33): Parse `~` in include paths.
+- [Issue 34](https://github.com/veeso/ssh2-config/issues/34): Fix parsing of multiple algos on the same row.
+- Updated default algos to `V_10_2_P1`
+
 ## 0.6.2
 
 Released on 25/09/2025
@@ -37,7 +82,8 @@ Developed by [@milliams](https://github.com/milliams)
 
 Released on 25/09/2025
 
-- [Issue 30](https://github.com/veeso/ssh2-config/issues/30): Host blocks from included files  didn't get registered. Fixed that.
+- [Issue 30](https://github.com/veeso/ssh2-config/issues/30): Host blocks from included files didn't get registered.
+  Fixed that.
 
 ## 0.6.0
 
@@ -91,11 +137,13 @@ Released on 19/12/2024
 - thiserror `2.0`
 - ‼️ **BREAKING CHANGE**: Added support for unsupported fields:
 
-    `AddressFamily, BatchMode, CanonicalDomains, CanonicalizeFallbackLock, CanonicalizeHostname, CanonicalizeMaxDots, CanonicalizePermittedCNAMEs, CheckHostIP, ClearAllForwardings, ControlMaster, ControlPath, ControlPersist, DynamicForward, EnableSSHKeysign, EscapeChar, ExitOnForwardFailure, FingerprintHash, ForkAfterAuthentication, ForwardAgent, ForwardX11, ForwardX11Timeout, ForwardX11Trusted, GatewayPorts, GlobalKnownHostsFile, GSSAPIAuthentication, GSSAPIDelegateCredentials, HashKnownHosts, HostbasedAcceptedAlgorithms, HostbasedAuthentication, HostKeyAlias, HostbasedKeyTypes, IdentitiesOnly, IdentityAgent, Include, IPQoS, KbdInteractiveAuthentication, KbdInteractiveDevices, KnownHostsCommand, LocalCommand, LocalForward, LogLevel, LogVerbose, NoHostAuthenticationForLocalhost, NumberOfPasswordPrompts, PasswordAuthentication, PermitLocalCommand, PermitRemoteOpen, PKCS11Provider, PreferredAuthentications, ProxyCommand, ProxyJump, ProxyUseFdpass, PubkeyAcceptedKeyTypes, RekeyLimit, RequestTTY, RevokedHostKeys, SecruityKeyProvider, SendEnv, ServerAliveCountMax, SessionType, SetEnv, StdinNull, StreamLocalBindMask, StrictHostKeyChecking, SyslogFacility, UpdateHostKeys, UserKnownHostsFile, VerifyHostKeyDNS, VisualHostKey, XAuthLocation`
+  `AddressFamily, BatchMode, CanonicalDomains, CanonicalizeFallbackLock, CanonicalizeHostname, CanonicalizeMaxDots, CanonicalizePermittedCNAMEs, CheckHostIP, ClearAllForwardings, ControlMaster, ControlPath, ControlPersist, DynamicForward, EnableSSHKeysign, EscapeChar, ExitOnForwardFailure, FingerprintHash, ForkAfterAuthentication, ForwardAgent, ForwardX11, ForwardX11Timeout, ForwardX11Trusted, GatewayPorts, GlobalKnownHostsFile, GSSAPIAuthentication, GSSAPIDelegateCredentials, HashKnownHosts, HostbasedAcceptedAlgorithms, HostbasedAuthentication, HostKeyAlias, HostbasedKeyTypes, IdentitiesOnly, IdentityAgent, Include, IPQoS, KbdInteractiveAuthentication, KbdInteractiveDevices, KnownHostsCommand, LocalCommand, LocalForward, LogLevel, LogVerbose, NoHostAuthenticationForLocalhost, NumberOfPasswordPrompts, PasswordAuthentication, PermitLocalCommand, PermitRemoteOpen, PKCS11Provider, PreferredAuthentications, ProxyCommand, ProxyJump, ProxyUseFdpass, PubkeyAcceptedKeyTypes, RekeyLimit, RequestTTY, RevokedHostKeys, SecruityKeyProvider, SendEnv, ServerAliveCountMax, SessionType, SetEnv, StdinNull, StreamLocalBindMask, StrictHostKeyChecking, SyslogFacility, UpdateHostKeys, UserKnownHostsFile, VerifyHostKeyDNS, VisualHostKey, XAuthLocation`
 
-    If you want to keep the behaviour as-is, use `ParseRule::STRICT | ParseRule::ALLOW_UNSUPPORTED_FIELDS` when calling `parse()` if you were using `ParseRule::STRICT` before.
+  If you want to keep the behaviour as-is, use `ParseRule::STRICT | ParseRule::ALLOW_UNSUPPORTED_FIELDS` when calling
+  `parse()` if you were using `ParseRule::STRICT` before.
 
-    Otherwise you can now access unsupported fields by using the `unsupported_fields` field on the `HostParams` structure like this:
+  Otherwise you can now access unsupported fields by using the `unsupported_fields` field on the `HostParams` structure
+  like this:
 
     ```rust
     use ssh2_config::{ParseRule, SshConfig};
@@ -133,7 +181,8 @@ Released on 28/07/2023
 
 Released on 09/05/2023
 
-- Added `ParseRule` field to `parse()` method to specify some rules for parsing. ❗ To keep the behaviour as-is use `ParseRule::STRICT`
+- Added `ParseRule` field to `parse()` method to specify some rules for parsing. ❗ To keep the behaviour as-is use
+  `ParseRule::STRICT`
 
 ## 0.1.6
 

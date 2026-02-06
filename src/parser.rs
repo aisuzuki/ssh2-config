@@ -48,6 +48,8 @@ pub enum SshParserError {
     Io(#[from] IoError),
     #[error("glob error: {0}")]
     Glob(#[from] glob::GlobError),
+    #[error("invalid quotes")]
+    InvalidQuotes,
     #[error("missing argument")]
     MissingArgument,
     #[error("pattern error: {0}")]
@@ -172,13 +174,97 @@ impl SshConfigParser {
         Ok(())
     }
 
-    /// Strip comments from line
+    /// Strip comments from line (quote-aware)
     fn strip_comments(s: &str) -> String {
-        if let Some(pos) = s.find('#') {
-            s[..pos].to_string()
-        } else {
-            s.to_string()
+        let mut in_quotes = false;
+        let mut result = String::new();
+
+        for c in s.chars() {
+            match c {
+                '"' => {
+                    in_quotes = !in_quotes;
+                    result.push(c);
+                }
+                '#' if !in_quotes => {
+                    // Found a comment outside quotes, stop here
+                    break;
+                }
+                _ => {
+                    result.push(c);
+                }
+            }
         }
+
+        result
+    }
+
+    /// Count unescaped double quotes in a string.
+    /// A quote is considered escaped if preceded by a backslash that is not itself escaped.
+    fn count_unescaped_quotes(s: &str) -> usize {
+        let mut count = 0;
+        let chars: Vec<char> = s.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '\\' && i + 1 < chars.len() {
+                // Skip the escaped character
+                i += 2;
+            } else if chars[i] == '"' {
+                count += 1;
+                i += 1;
+            } else {
+                i += 1;
+            }
+        }
+        count
+    }
+
+    /// Check if a string ends with an unescaped double quote.
+    fn ends_with_unescaped_quote(s: &str) -> bool {
+        if !s.ends_with('"') {
+            return false;
+        }
+        // Count trailing backslashes before the final quote
+        let chars: Vec<char> = s.chars().collect();
+        let mut backslash_count = 0;
+        for i in (0..chars.len() - 1).rev() {
+            if chars[i] == '\\' {
+                backslash_count += 1;
+            } else {
+                break;
+            }
+        }
+        // If even number of backslashes, the quote is unescaped
+        backslash_count % 2 == 0
+    }
+
+    /// Process escape sequences in a string.
+    /// Handles: \" -> ", \\ -> \, \' -> '
+    /// Unrecognized escapes preserve the backslash.
+    fn unescape_string(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let chars: Vec<char> = s.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '\\' && i + 1 < chars.len() {
+                let next = chars[i + 1];
+                match next {
+                    '"' | '\\' | '\'' => {
+                        // Recognized escape sequence: skip backslash, add the character
+                        result.push(next);
+                        i += 2;
+                    }
+                    _ => {
+                        // Unrecognized escape: preserve the backslash
+                        result.push(chars[i]);
+                        i += 1;
+                    }
+                }
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        }
+        result
     }
 
     /// Update current given host with field argument
@@ -266,7 +352,11 @@ impl SshConfigParser {
             Field::IdentityFile => {
                 let value = Self::parse_path_list(args)?;
                 trace!("identity_file: {value:?}",);
-                params.identity_file = Some(value);
+                if let Some(existing) = &mut params.identity_file {
+                    existing.extend(value);
+                } else {
+                    params.identity_file = Some(value);
+                }
             }
             Field::IgnoreUnknown => {
                 let value = Self::parse_comma_separated_list(args)?;
@@ -417,12 +507,17 @@ impl SshConfigParser {
         if path_match.starts_with(PATH_SEPARATOR) {
             path_match.to_string()
         } else {
-            // prepend $HOME/.ssh
             let home_dir = dirs::home_dir().unwrap_or(PathBuf::from(PATH_SEPARATOR));
-            format!(
-                "{dir}{PATH_SEPARATOR}{path_match}",
-                dir = home_dir.join(".ssh").display()
-            )
+            // if path_match starts with `~`, strip it and prepend $HOME
+            if let Some(stripped) = path_match.strip_prefix("~") {
+                format!("{dir}{PATH_SEPARATOR}{stripped}", dir = home_dir.display())
+            } else {
+                // prepend $HOME/.ssh
+                format!(
+                    "{dir}{PATH_SEPARATOR}{path_match}",
+                    dir = home_dir.join(".ssh").display()
+                )
+            }
         }
     }
 
@@ -503,10 +598,18 @@ impl SshConfigParser {
         let other_tokens = other_tokens.trim().trim_start_matches('=').trim();
         trace!("other tokens trimmed: '{other_tokens}'",);
 
+        // Validate quotes - count unescaped quotes (not preceded by backslash)
+        let unescaped_quote_count = Self::count_unescaped_quotes(other_tokens);
+        if unescaped_quote_count % 2 != 0 {
+            return Err(SshParserError::InvalidQuotes);
+        }
+
         // if args is quoted, don't split it
-        let args = if other_tokens.starts_with('"') && other_tokens.ends_with('"') {
+        let args = if other_tokens.starts_with('"') && Self::ends_with_unescaped_quote(other_tokens)
+        {
             trace!("quoted args: '{other_tokens}'",);
-            vec![other_tokens[1..other_tokens.len() - 1].to_string()]
+            let content = &other_tokens[1..other_tokens.len() - 1];
+            vec![Self::unescape_string(content)]
         } else {
             trace!("splitting args (non-quoted): '{other_tokens}'",);
             // split by whitespace
@@ -560,7 +663,9 @@ impl SshConfigParser {
         Ok(Duration::from_secs(value as u64))
     }
 
-    /// Parse host argument
+    /// Parse host argument.
+    /// A leading `!` indicates a negated pattern. Any `!` characters after the first position
+    /// are treated as literal characters in the pattern.
     fn parse_host(args: Vec<String>) -> SshParserResult<Vec<HostClause>> {
         if args.is_empty() {
             return Err(SshParserError::MissingArgument);
@@ -569,11 +674,10 @@ impl SshConfigParser {
         Ok(args
             .into_iter()
             .map(|x| {
-                let tokens: Vec<&str> = x.split('!').collect();
-                if tokens.len() == 2 {
-                    HostClause::new(tokens[1].to_string(), true)
+                if let Some(pattern) = x.strip_prefix('!') {
+                    HostClause::new(pattern.to_string(), true)
                 } else {
-                    HostClause::new(tokens[0].to_string(), false)
+                    HostClause::new(x, false)
                 }
             })
             .collect())
@@ -1336,6 +1440,27 @@ mod tests {
     }
 
     #[test]
+    fn should_fail_on_mismatched_quotes() {
+        crate::test_log();
+
+        // Unclosed opening quote
+        assert!(matches!(
+            SshConfigParser::tokenize_line(r#"Hostname "example.com"#).unwrap_err(),
+            SshParserError::InvalidQuotes
+        ));
+        // Unexpected closing quote (no opening)
+        assert!(matches!(
+            SshConfigParser::tokenize_line(r#"Hostname example.com""#).unwrap_err(),
+            SshParserError::InvalidQuotes
+        ));
+        // Quote in middle, unclosed
+        assert!(matches!(
+            SshConfigParser::tokenize_line(r#"Hostname foo "bar"#).unwrap_err(),
+            SshParserError::InvalidQuotes
+        ));
+    }
+
+    #[test]
     fn should_parse_boolean() -> Result<(), SshParserError> {
         crate::test_log();
         assert_eq!(
@@ -1598,6 +1723,33 @@ mod tests {
     }
 
     #[test]
+    fn should_preserve_hash_inside_quoted_strings() {
+        crate::test_log();
+
+        // Hash inside quotes should NOT be treated as a comment
+        assert_eq!(
+            SshConfigParser::strip_comments(r#"Ciphers "aes256-ctr # not a comment""#).as_str(),
+            r#"Ciphers "aes256-ctr # not a comment""#
+        );
+        // Hash after closing quote should be treated as a comment
+        assert_eq!(
+            SshConfigParser::strip_comments(r#"Ciphers "aes256-ctr" # this is a comment"#).as_str(),
+            r#"Ciphers "aes256-ctr" "#
+        );
+        // Multiple quoted sections
+        assert_eq!(
+            SshConfigParser::strip_comments(r#"ProxyCommand "ssh # hop" -W "dest # host""#)
+                .as_str(),
+            r#"ProxyCommand "ssh # hop" -W "dest # host""#
+        );
+        // Comment after multiple quoted sections
+        assert_eq!(
+            SshConfigParser::strip_comments(r#"Key "val1" "val2" # comment"#).as_str(),
+            r#"Key "val1" "val2" "#
+        );
+    }
+
+    #[test]
     fn test_should_parse_config_with_quotes_and_eq() {
         crate::test_log();
 
@@ -1667,6 +1819,418 @@ mod tests {
         let s = "config.local";
         let resolved = PathBuf::from(SshConfigParser::resolve_include_path(s));
         assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn test_should_resolve_include_path_with_tilde() {
+        let p = "~/.ssh/config.local";
+        let resolved = SshConfigParser::resolve_include_path(p);
+        let mut expected = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+        expected.push(".ssh");
+        expected.push("config.local");
+        assert_eq!(PathBuf::from(resolved), expected);
+    }
+
+    #[test]
+    fn should_fail_parsing_algos_missing_arg() {
+        crate::test_log();
+        assert!(matches!(
+            SshConfigParser::parse_algos(vec![]).unwrap_err(),
+            SshParserError::MissingArgument
+        ));
+    }
+
+    #[test]
+    fn should_parse_duration_zero() {
+        crate::test_log();
+        assert_eq!(
+            SshConfigParser::parse_duration(vec![String::from("0")]).unwrap(),
+            Duration::from_secs(0)
+        );
+    }
+
+    #[test]
+    fn should_parse_port_boundary() {
+        crate::test_log();
+        // Minimum valid port
+        assert_eq!(
+            SshConfigParser::parse_port(vec![String::from("1")]).unwrap(),
+            1
+        );
+        // Maximum valid port
+        assert_eq!(
+            SshConfigParser::parse_port(vec![String::from("65535")]).unwrap(),
+            65535
+        );
+    }
+
+    #[test]
+    fn should_update_host_add_keys_to_agent() {
+        crate::test_log();
+        let mut host = Host::new(vec![], HostParams::new(&DefaultAlgorithms::empty()));
+        SshConfigParser::update_host(
+            Field::AddKeysToAgent,
+            vec![String::from("yes")],
+            &mut host,
+            ParseRule::STRICT,
+            &DefaultAlgorithms::empty(),
+        )
+        .unwrap();
+        assert_eq!(host.params.add_keys_to_agent.unwrap(), true);
+
+        let mut host2 = Host::new(vec![], HostParams::new(&DefaultAlgorithms::empty()));
+        SshConfigParser::update_host(
+            Field::AddKeysToAgent,
+            vec![String::from("no")],
+            &mut host2,
+            ParseRule::STRICT,
+            &DefaultAlgorithms::empty(),
+        )
+        .unwrap();
+        assert_eq!(host2.params.add_keys_to_agent.unwrap(), false);
+    }
+
+    #[test]
+    fn should_update_host_forward_agent() {
+        crate::test_log();
+        let mut host = Host::new(vec![], HostParams::new(&DefaultAlgorithms::empty()));
+        SshConfigParser::update_host(
+            Field::ForwardAgent,
+            vec![String::from("yes")],
+            &mut host,
+            ParseRule::STRICT,
+            &DefaultAlgorithms::empty(),
+        )
+        .unwrap();
+        assert_eq!(host.params.forward_agent.unwrap(), true);
+    }
+
+    #[test]
+    fn should_update_host_proxy_jump() {
+        crate::test_log();
+        let mut host = Host::new(vec![], HostParams::new(&DefaultAlgorithms::empty()));
+        SshConfigParser::update_host(
+            Field::ProxyJump,
+            vec![String::from("jump1,jump2,jump3")],
+            &mut host,
+            ParseRule::STRICT,
+            &DefaultAlgorithms::empty(),
+        )
+        .unwrap();
+        assert_eq!(
+            host.params.proxy_jump.unwrap(),
+            vec![
+                "jump1".to_string(),
+                "jump2".to_string(),
+                "jump3".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn should_update_host_identity_file() {
+        crate::test_log();
+        let mut host = Host::new(vec![], HostParams::new(&DefaultAlgorithms::empty()));
+        SshConfigParser::update_host(
+            Field::IdentityFile,
+            vec![String::from("/path/to/key1"), String::from("/path/to/key2")],
+            &mut host,
+            ParseRule::STRICT,
+            &DefaultAlgorithms::empty(),
+        )
+        .unwrap();
+        assert_eq!(
+            host.params.identity_file.unwrap(),
+            vec![
+                PathBuf::from("/path/to/key1"),
+                PathBuf::from("/path/to/key2")
+            ]
+        );
+    }
+
+    #[test]
+    fn test_should_allow_and_append_multiple_identity_files_directives() {
+        crate::test_log();
+        let config = r##"
+Host test
+    IdentityFile /path/to/key1 /path/to/key2
+    IdentityFile /path/to/key3
+"##;
+        let mut reader = BufReader::new(config.as_bytes());
+        let config = SshConfig::default()
+            .default_algorithms(DefaultAlgorithms::empty())
+            .parse(&mut reader, ParseRule::STRICT)
+            .expect("Failed to parse config");
+
+        let params = config.query("test");
+        assert_eq!(
+            params.identity_file.as_ref().unwrap(),
+            &vec![
+                PathBuf::from("/path/to/key1"),
+                PathBuf::from("/path/to/key2"),
+                PathBuf::from("/path/to/key3"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_should_accumulate_identity_files_across_host_blocks() {
+        crate::test_log();
+        let config = r##"
+Host test
+    IdentityFile /path/to/specific_key
+
+Host *
+    IdentityFile /path/to/default_key
+"##;
+        let mut reader = BufReader::new(config.as_bytes());
+        let config = SshConfig::default()
+            .default_algorithms(DefaultAlgorithms::empty())
+            .parse(&mut reader, ParseRule::STRICT)
+            .expect("Failed to parse config");
+
+        let params = config.query("test");
+        // Both identity files should be present: specific first, then default
+        assert_eq!(
+            params.identity_file.as_ref().unwrap(),
+            &vec![
+                PathBuf::from("/path/to/specific_key"),
+                PathBuf::from("/path/to/default_key"),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_store_unsupported_fields_when_allowed() {
+        crate::test_log();
+
+        let config = r##"
+Host test
+    PasswordAuthentication yes
+"##;
+        let mut reader = BufReader::new(config.as_bytes());
+        let config = SshConfig::default()
+            .default_algorithms(DefaultAlgorithms::empty())
+            .parse(&mut reader, ParseRule::ALLOW_UNSUPPORTED_FIELDS)
+            .unwrap();
+
+        let params = config.query("test");
+        assert!(
+            params
+                .unsupported_fields
+                .contains_key("passwordauthentication")
+        );
+    }
+
+    #[test]
+    fn should_tokenize_line_with_equals_separator() {
+        crate::test_log();
+        let (field, args) = SshConfigParser::tokenize_line("HostName=example.com").unwrap();
+        assert_eq!(field, Field::HostName);
+        assert_eq!(args, vec!["example.com".to_string()]);
+    }
+
+    #[test]
+    fn should_tokenize_line_with_quoted_args() {
+        crate::test_log();
+        let (field, args) =
+            SshConfigParser::tokenize_line("Ciphers \"aes256-ctr,aes128-ctr\"").unwrap();
+        assert_eq!(field, Field::Ciphers);
+        assert_eq!(args, vec!["aes256-ctr,aes128-ctr".to_string()]);
+    }
+
+    #[test]
+    fn should_tokenize_line_with_equals_and_quoted_args() {
+        crate::test_log();
+        let (field, args) =
+            SshConfigParser::tokenize_line("Ciphers=\"aes256-ctr,aes128-ctr\"").unwrap();
+        assert_eq!(field, Field::Ciphers);
+        assert_eq!(args, vec!["aes256-ctr,aes128-ctr".to_string()]);
+    }
+
+    #[test]
+    fn should_unescape_quoted_args() {
+        crate::test_log();
+
+        // Test escaped double quote: \" -> "
+        let (field, args) =
+            SshConfigParser::tokenize_line(r#"HostName "gateway\"server""#).unwrap();
+        assert_eq!(field, Field::HostName);
+        assert_eq!(args, vec![r#"gateway"server"#.to_string()]);
+
+        // Test escaped backslash: \\ -> \
+        let (field, args) = SshConfigParser::tokenize_line(r#"HostName "path\\to\\host""#).unwrap();
+        assert_eq!(field, Field::HostName);
+        assert_eq!(args, vec![r#"path\to\host"#.to_string()]);
+
+        // Test escaped single quote: \' -> '
+        let (field, args) = SshConfigParser::tokenize_line(r#"HostName "it\'s a test""#).unwrap();
+        assert_eq!(field, Field::HostName);
+        assert_eq!(args, vec!["it's a test".to_string()]);
+
+        // Test multiple escape sequences combined
+        let (field, args) =
+            SshConfigParser::tokenize_line(r#"HostName "say \"hello\" and \\go""#).unwrap();
+        assert_eq!(field, Field::HostName);
+        assert_eq!(args, vec![r#"say "hello" and \go"#.to_string()]);
+
+        // Test unrecognized escape sequence (backslash preserved)
+        let (field, args) = SshConfigParser::tokenize_line(r#"HostName "test\nvalue""#).unwrap();
+        assert_eq!(field, Field::HostName);
+        assert_eq!(args, vec![r#"test\nvalue"#.to_string()]);
+    }
+
+    #[test]
+    fn should_count_unescaped_quotes() {
+        crate::test_log();
+
+        // No quotes
+        assert_eq!(SshConfigParser::count_unescaped_quotes("hello"), 0);
+
+        // Simple unescaped quotes
+        assert_eq!(SshConfigParser::count_unescaped_quotes(r#""hello""#), 2);
+
+        // Escaped quotes should not be counted
+        assert_eq!(SshConfigParser::count_unescaped_quotes(r#"\"hello\""#), 0);
+
+        // Mixed escaped and unescaped
+        assert_eq!(
+            SshConfigParser::count_unescaped_quotes(r#""hello\"world""#),
+            2
+        );
+
+        // Escaped backslash before quote (quote is unescaped)
+        assert_eq!(SshConfigParser::count_unescaped_quotes(r#"\\""#), 1);
+
+        // Empty string
+        assert_eq!(SshConfigParser::count_unescaped_quotes(""), 0);
+
+        // Only escaped quote
+        assert_eq!(SshConfigParser::count_unescaped_quotes(r#"\""#), 0);
+    }
+
+    #[test]
+    fn should_detect_ends_with_unescaped_quote() {
+        crate::test_log();
+
+        // Ends with unescaped quote
+        assert!(SshConfigParser::ends_with_unescaped_quote(r#""hello""#));
+
+        // Ends with escaped quote (odd backslashes)
+        assert!(!SshConfigParser::ends_with_unescaped_quote(r#""hello\""#));
+
+        // Ends with escaped backslash then unescaped quote
+        assert!(SshConfigParser::ends_with_unescaped_quote(r#""hello\\""#));
+
+        // Ends with three backslashes then quote (escaped)
+        assert!(!SshConfigParser::ends_with_unescaped_quote(r#""hello\\\""#));
+
+        // Doesn't end with quote at all
+        assert!(!SshConfigParser::ends_with_unescaped_quote("hello"));
+
+        // Single quote
+        assert!(SshConfigParser::ends_with_unescaped_quote(r#"""#));
+
+        // Single escaped quote
+        assert!(!SshConfigParser::ends_with_unescaped_quote(r#"\""#));
+    }
+
+    #[test]
+    fn should_unescape_string() {
+        crate::test_log();
+
+        // Escaped double quote
+        assert_eq!(
+            SshConfigParser::unescape_string(r#"hello\"world"#),
+            r#"hello"world"#
+        );
+
+        // Escaped backslash
+        assert_eq!(
+            SshConfigParser::unescape_string(r#"path\\to\\file"#),
+            r#"path\to\file"#
+        );
+
+        // Escaped single quote
+        assert_eq!(SshConfigParser::unescape_string(r#"it\'s"#), "it's");
+
+        // Multiple escape sequences
+        assert_eq!(
+            SshConfigParser::unescape_string(r#"say \"hi\" and \\go"#),
+            r#"say "hi" and \go"#
+        );
+
+        // Unrecognized escape (backslash preserved)
+        assert_eq!(
+            SshConfigParser::unescape_string(r#"test\nvalue"#),
+            r#"test\nvalue"#
+        );
+
+        // No escapes
+        assert_eq!(SshConfigParser::unescape_string("plain text"), "plain text");
+
+        // Empty string
+        assert_eq!(SshConfigParser::unescape_string(""), "");
+
+        // Trailing backslash (no char to escape)
+        assert_eq!(SshConfigParser::unescape_string(r#"test\"#), r#"test\"#);
+
+        // Double escaped backslash
+        assert_eq!(SshConfigParser::unescape_string(r#"\\\\"#), r#"\\"#);
+    }
+
+    #[test]
+    fn should_parse_host_with_single_pattern() {
+        crate::test_log();
+        let result = SshConfigParser::parse_host(vec![String::from("example.com")]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].pattern, "example.com");
+        assert!(!result[0].negated);
+    }
+
+    #[test]
+    fn should_parse_host_with_exclamation_in_pattern() {
+        crate::test_log();
+
+        // Pattern with ! in the middle should be treated as literal (non-negated)
+        let result = SshConfigParser::parse_host(vec![String::from("host!name")]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].pattern, "host!name");
+        assert!(!result[0].negated);
+
+        // Negated pattern with ! in the pattern itself
+        let result = SshConfigParser::parse_host(vec![String::from("!host!name")]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].pattern, "host!name");
+        assert!(result[0].negated);
+
+        // Multiple ! after the negation prefix should be preserved
+        let result = SshConfigParser::parse_host(vec![String::from("!a!b!c")]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].pattern, "a!b!c");
+        assert!(result[0].negated);
+
+        // Only leading ! is negation, rest is literal
+        let result = SshConfigParser::parse_host(vec![String::from("a!b")]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].pattern, "a!b");
+        assert!(!result[0].negated);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn should_update_host_use_keychain() {
+        crate::test_log();
+        let mut host = Host::new(vec![], HostParams::new(&DefaultAlgorithms::empty()));
+        SshConfigParser::update_host(
+            Field::UseKeychain,
+            vec![String::from("yes")],
+            &mut host,
+            ParseRule::STRICT,
+            &DefaultAlgorithms::empty(),
+        )
+        .unwrap();
+        assert_eq!(host.params.use_keychain.unwrap(), true);
     }
 
     fn create_ssh_config_with_quotes_and_eq() -> NamedTempFile {

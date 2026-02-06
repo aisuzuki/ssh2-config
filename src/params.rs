@@ -12,7 +12,7 @@ use super::{Duration, PathBuf};
 use crate::DefaultAlgorithms;
 
 /// Describes the ssh configuration.
-/// Configuration is describes in this document: <http://man.openbsd.org/OpenBSD-current/man5/ssh_config.5>
+/// Configuration is described in this document: <http://man.openbsd.org/OpenBSD-current/man5/ssh_config.5>
 /// Only arguments supported by libssh2 are implemented
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostParams {
@@ -42,7 +42,8 @@ pub struct HostParams {
     pub host_name: Option<String>,
     /// Specifies the path of the identity file to be used when authenticating.
     /// More than one file can be specified.
-    /// If more than one file is specified, they will be read in order
+    /// If more than one file is specified, they will be read in order.
+    /// There may be multiple lines of this directive; in case subsequent lines will be appended to the previous ones.
     pub identity_file: Option<Vec<PathBuf>>,
     /// Specifies a pattern-list of unknown options to be ignored if they are encountered in configuration parsing
     pub ignore_unknown: Option<Vec<String>>,
@@ -52,7 +53,7 @@ pub struct HostParams {
     pub mac: Algorithms,
     /// Specifies the port number to connect on the remote host.
     pub port: Option<u16>,
-    /// Specifies one or more jump proxies as either [user@]host[:port] or an ssh URI
+    /// Specifies one or more jump proxies as either \[user@\]host\[:port\] or an ssh URI
     pub proxy_jump: Option<Vec<String>>,
     /// Specifies the signature algorithms that will be used for public key authentication
     pub pubkey_accepted_algorithms: Algorithms,
@@ -137,10 +138,12 @@ impl HostParams {
         self.connect_timeout = self.connect_timeout.or(b.connect_timeout);
         self.forward_agent = self.forward_agent.or(b.forward_agent);
         self.host_name = self.host_name.clone().or_else(|| b.host_name.clone());
-        self.identity_file = self
-            .identity_file
-            .clone()
-            .or_else(|| b.identity_file.clone());
+        // IdentityFile accumulates across Host blocks (unlike other directives)
+        match (&mut self.identity_file, &b.identity_file) {
+            (Some(existing), Some(other)) => existing.extend(other.clone()),
+            (None, Some(other)) => self.identity_file = Some(other.clone()),
+            _ => {}
+        }
         self.ignore_unknown = self
             .ignore_unknown
             .clone()
@@ -267,6 +270,228 @@ mod tests {
         assert_eq!(
             params.ciphers.algorithms(),
             vec!["c".to_string(), "d".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_ignored_returns_false_when_none() {
+        let params = HostParams::new(&DefaultAlgorithms::default());
+        assert!(!params.ignored("SomeParam"));
+    }
+
+    #[test]
+    fn test_ignored_returns_false_when_not_in_list() {
+        let mut params = HostParams::new(&DefaultAlgorithms::default());
+        params.ignore_unknown = Some(vec!["Param1".to_string(), "Param2".to_string()]);
+        assert!(!params.ignored("OtherParam"));
+    }
+
+    #[test]
+    fn test_ignored_returns_true_when_in_list() {
+        let mut params = HostParams::new(&DefaultAlgorithms::default());
+        params.ignore_unknown = Some(vec!["Param1".to_string(), "Param2".to_string()]);
+        assert!(params.ignored("Param1"));
+        assert!(params.ignored("Param2"));
+    }
+
+    #[test]
+    fn test_overwrite_if_none_all_fields() {
+        let mut params = HostParams::new(&DefaultAlgorithms::empty());
+
+        let mut b = HostParams::new(&DefaultAlgorithms::empty());
+        b.add_keys_to_agent = Some(true);
+        b.bind_address = Some(String::from("addr"));
+        b.bind_interface = Some(String::from("iface"));
+        b.certificate_file = Some(std::path::PathBuf::from("/cert"));
+        b.compression = Some(true);
+        b.connection_attempts = Some(5);
+        b.connect_timeout = Some(Duration::from_secs(30));
+        b.forward_agent = Some(true);
+        b.host_name = Some(String::from("host"));
+        b.identity_file = Some(vec![std::path::PathBuf::from("/id")]);
+        b.ignore_unknown = Some(vec!["field".to_string()]);
+        b.port = Some(22);
+        b.proxy_jump = Some(vec!["proxy".to_string()]);
+        b.pubkey_authentication = Some(true);
+        b.remote_forward = Some(8080);
+        b.server_alive_interval = Some(Duration::from_secs(60));
+        b.tcp_keep_alive = Some(true);
+        #[cfg(target_os = "macos")]
+        {
+            b.use_keychain = Some(true);
+        }
+        b.user = Some(String::from("user"));
+        b.ignored_fields
+            .insert("custom".to_string(), vec!["value".to_string()]);
+        b.unsupported_fields
+            .insert("unsupported".to_string(), vec!["val".to_string()]);
+
+        params.overwrite_if_none(&b);
+
+        assert_eq!(params.add_keys_to_agent, Some(true));
+        assert_eq!(params.bind_address, Some(String::from("addr")));
+        assert_eq!(params.bind_interface, Some(String::from("iface")));
+        assert_eq!(
+            params.certificate_file,
+            Some(std::path::PathBuf::from("/cert"))
+        );
+        assert_eq!(params.compression, Some(true));
+        assert_eq!(params.connection_attempts, Some(5));
+        assert_eq!(params.connect_timeout, Some(Duration::from_secs(30)));
+        assert_eq!(params.forward_agent, Some(true));
+        assert_eq!(params.host_name, Some(String::from("host")));
+        assert_eq!(
+            params.identity_file,
+            Some(vec![std::path::PathBuf::from("/id")])
+        );
+        assert_eq!(params.ignore_unknown, Some(vec!["field".to_string()]));
+        assert_eq!(params.port, Some(22));
+        assert_eq!(params.proxy_jump, Some(vec!["proxy".to_string()]));
+        assert_eq!(params.pubkey_authentication, Some(true));
+        assert_eq!(params.remote_forward, Some(8080));
+        assert_eq!(params.server_alive_interval, Some(Duration::from_secs(60)));
+        assert_eq!(params.tcp_keep_alive, Some(true));
+        #[cfg(target_os = "macos")]
+        assert_eq!(params.use_keychain, Some(true));
+        assert_eq!(params.user, Some(String::from("user")));
+        assert!(params.ignored_fields.contains_key("custom"));
+        assert!(params.unsupported_fields.contains_key("unsupported"));
+    }
+
+    #[test]
+    fn test_overwrite_if_none_does_not_overwrite_existing() {
+        let mut params = HostParams::new(&DefaultAlgorithms::empty());
+        params.add_keys_to_agent = Some(false);
+        params.bind_address = Some(String::from("original"));
+        params.compression = Some(false);
+        params.port = Some(2222);
+        params.user = Some(String::from("original_user"));
+        params
+            .ignored_fields
+            .insert("existing".to_string(), vec!["val1".to_string()]);
+        params
+            .unsupported_fields
+            .insert("existing_unsup".to_string(), vec!["val1".to_string()]);
+
+        let mut b = HostParams::new(&DefaultAlgorithms::empty());
+        b.add_keys_to_agent = Some(true);
+        b.bind_address = Some(String::from("new"));
+        b.compression = Some(true);
+        b.port = Some(22);
+        b.user = Some(String::from("new_user"));
+        b.ignored_fields
+            .insert("existing".to_string(), vec!["val2".to_string()]);
+        b.unsupported_fields
+            .insert("existing_unsup".to_string(), vec!["val2".to_string()]);
+
+        params.overwrite_if_none(&b);
+
+        // Should keep original values
+        assert_eq!(params.add_keys_to_agent, Some(false));
+        assert_eq!(params.bind_address, Some(String::from("original")));
+        assert_eq!(params.compression, Some(false));
+        assert_eq!(params.port, Some(2222));
+        assert_eq!(params.user, Some(String::from("original_user")));
+        assert_eq!(
+            params.ignored_fields.get("existing"),
+            Some(&vec!["val1".to_string()])
+        );
+        assert_eq!(
+            params.unsupported_fields.get("existing_unsup"),
+            Some(&vec!["val1".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_overwrite_if_none_algorithms_when_self_is_default() {
+        let mut params = HostParams::new(&DefaultAlgorithms::empty());
+
+        let mut b = HostParams::new(&DefaultAlgorithms::empty());
+        b.ca_signature_algorithms
+            .apply(AlgorithmsRule::from_str("ca-algo").expect("parse error"));
+        b.host_key_algorithms
+            .apply(AlgorithmsRule::from_str("hk-algo").expect("parse error"));
+        b.kex_algorithms
+            .apply(AlgorithmsRule::from_str("kex-algo").expect("parse error"));
+        b.mac
+            .apply(AlgorithmsRule::from_str("mac-algo").expect("parse error"));
+        b.pubkey_accepted_algorithms
+            .apply(AlgorithmsRule::from_str("pk-algo").expect("parse error"));
+
+        params.overwrite_if_none(&b);
+
+        assert_eq!(
+            params.ca_signature_algorithms.algorithms(),
+            &["ca-algo".to_string()]
+        );
+        assert_eq!(
+            params.host_key_algorithms.algorithms(),
+            &["hk-algo".to_string()]
+        );
+        assert_eq!(
+            params.kex_algorithms.algorithms(),
+            &["kex-algo".to_string()]
+        );
+        assert_eq!(params.mac.algorithms(), &["mac-algo".to_string()]);
+        assert_eq!(
+            params.pubkey_accepted_algorithms.algorithms(),
+            &["pk-algo".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_overwrite_if_none_algorithms_when_self_is_not_default() {
+        let mut params = HostParams::new(&DefaultAlgorithms::empty());
+        params
+            .ciphers
+            .apply(AlgorithmsRule::from_str("self-cipher").expect("parse error"));
+
+        let mut b = HostParams::new(&DefaultAlgorithms::empty());
+        b.ciphers
+            .apply(AlgorithmsRule::from_str("other-cipher").expect("parse error"));
+
+        params.overwrite_if_none(&b);
+
+        // Self's cipher should remain since it was already overridden
+        assert_eq!(params.ciphers.algorithms(), &["self-cipher".to_string()]);
+    }
+
+    #[test]
+    fn test_overwrite_if_none_accumulates_identity_files() {
+        let mut params = HostParams::new(&DefaultAlgorithms::empty());
+        params.identity_file = Some(vec![std::path::PathBuf::from("/path/to/key1")]);
+
+        let mut b = HostParams::new(&DefaultAlgorithms::empty());
+        b.identity_file = Some(vec![
+            std::path::PathBuf::from("/path/to/key2"),
+            std::path::PathBuf::from("/path/to/key3"),
+        ]);
+
+        params.overwrite_if_none(&b);
+
+        // Identity files should be accumulated, not replaced
+        assert_eq!(
+            params.identity_file,
+            Some(vec![
+                std::path::PathBuf::from("/path/to/key1"),
+                std::path::PathBuf::from("/path/to/key2"),
+                std::path::PathBuf::from("/path/to/key3"),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_overwrite_if_none_identity_files_when_self_is_none() {
+        let mut params = HostParams::new(&DefaultAlgorithms::empty());
+
+        let mut b = HostParams::new(&DefaultAlgorithms::empty());
+        b.identity_file = Some(vec![std::path::PathBuf::from("/path/to/key1")]);
+
+        params.overwrite_if_none(&b);
+
+        assert_eq!(
+            params.identity_file,
+            Some(vec![std::path::PathBuf::from("/path/to/key1")])
         );
     }
 }

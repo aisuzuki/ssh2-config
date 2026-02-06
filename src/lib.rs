@@ -4,17 +4,21 @@
 //! # ssh2-config
 //!
 //! ssh2-config a library which provides a parser for the SSH configuration file,
-//! to be used in pair with the [ssh2](https://github.com/alexcrichton/ssh2-rs) crate.
+//! to be used in pair with the [ssh2](https://github.com/alexcrichton/ssh2-rs) crate, or
+//! in general with any other OpenSSH compatible SSH client implementation.
 //!
 //! This library provides a method to parse the configuration file and returns the
 //! configuration parsed into a structure.
-//! The `SshConfig` structure provides all the attributes which **can** be used to configure the **ssh2 Session**
+//! The [`SshConfig`] structure provides all the attributes which **can** be used to configure the **ssh2 Session**
 //! and to resolve the host, port and username.
 //!
-//! Once the configuration has been parsed you can use the `query(&str)`
+//! Once the configuration has been parsed you can use the [`SshConfig::query`]
 //! method to query configuration for a certain host, based on the configured patterns.
 //! Even if many attributes are not exposed, since not supported, there is anyway a validation of the configuration,
 //! so invalid configuration will result in a parsing error.
+//!
+//! The reference used for the configuration file and how parameters are resolved is the OpenSSH one,
+//! is described at <http://man.openbsd.org/OpenBSD-current/man5/ssh_config.5>.
 //!
 //! ## Get started
 //!
@@ -104,130 +108,8 @@
 //!
 //! ## Configuring default algorithms
 //!
-//! When you invoke [`SshConfig::default`], the default algorithms are set from openssh source code, which are the following:
-//!
-//! ```txt
-//! ca_signature_algorithms:
-//!     "ssh-ed25519",
-//!     "ecdsa-sha2-nistp256",
-//!     "ecdsa-sha2-nistp384",
-//!     "ecdsa-sha2-nistp521",
-//!     "sk-ssh-ed25519@openssh.com",
-//!     "sk-ecdsa-sha2-nistp256@openssh.com",
-//!     "rsa-sha2-512",
-//!     "rsa-sha2-256",
-//!
-//! ciphers:
-//!     "chacha20-poly1305@openssh.com",
-//!     "aes128-ctr,aes192-ctr,aes256-ctr",
-//!     "aes128-gcm@openssh.com,aes256-gcm@openssh.com",
-//!
-//! host_key_algorithms:
-//!     "ssh-ed25519-cert-v01@openssh.com",
-//!     "ecdsa-sha2-nistp256-cert-v01@openssh.com",
-//!     "ecdsa-sha2-nistp384-cert-v01@openssh.com",
-//!     "ecdsa-sha2-nistp521-cert-v01@openssh.com",
-//!     "sk-ssh-ed25519-cert-v01@openssh.com",
-//!     "sk-ecdsa-sha2-nistp256-cert-v01@openssh.com",
-//!     "rsa-sha2-512-cert-v01@openssh.com",
-//!     "rsa-sha2-256-cert-v01@openssh.com",
-//!     "ssh-ed25519",
-//!     "ecdsa-sha2-nistp256",
-//!     "ecdsa-sha2-nistp384",
-//!     "ecdsa-sha2-nistp521",
-//!     "sk-ssh-ed25519@openssh.com",
-//!     "sk-ecdsa-sha2-nistp256@openssh.com",
-//!     "rsa-sha2-512",
-//!     "rsa-sha2-256",
-//!
-//! kex_algorithms:
-//!     "sntrup761x25519-sha512",
-//!     "sntrup761x25519-sha512@openssh.com",
-//!     "mlkem768x25519-sha256",
-//!     "curve25519-sha256",
-//!     "curve25519-sha256@libssh.org",
-//!     "ecdh-sha2-nistp256",
-//!     "ecdh-sha2-nistp384",
-//!     "ecdh-sha2-nistp521",
-//!     "diffie-hellman-group-exchange-sha256",
-//!     "diffie-hellman-group16-sha512",
-//!     "diffie-hellman-group18-sha512",
-//!     "diffie-hellman-group14-sha256",
-//!     "ssh-ed25519-cert-v01@openssh.com",
-//!     "ecdsa-sha2-nistp256-cert-v01@openssh.com",
-//!     "ecdsa-sha2-nistp384-cert-v01@openssh.com",
-//!     "ecdsa-sha2-nistp521-cert-v01@openssh.com",
-//!     "sk-ssh-ed25519-cert-v01@openssh.com",
-//!     "sk-ecdsa-sha2-nistp256-cert-v01@openssh.com",
-//!     "rsa-sha2-512-cert-v01@openssh.com",
-//!     "rsa-sha2-256-cert-v01@openssh.com",
-//!     "ssh-ed25519",
-//!     "ecdsa-sha2-nistp256",
-//!     "ecdsa-sha2-nistp384",
-//!     "ecdsa-sha2-nistp521",
-//!     "sk-ssh-ed25519@openssh.com",
-//!     "sk-ecdsa-sha2-nistp256@openssh.com",
-//!     "rsa-sha2-512",
-//!     "rsa-sha2-256",
-//!     "chacha20-poly1305@openssh.com",
-//!     "aes128-ctr,aes192-ctr,aes256-ctr",
-//!     "aes128-gcm@openssh.com,aes256-gcm@openssh.com",
-//!     "chacha20-poly1305@openssh.com",
-//!     "aes128-ctr,aes192-ctr,aes256-ctr",
-//!     "aes128-gcm@openssh.com,aes256-gcm@openssh.com",
-//!     "umac-64-etm@openssh.com",
-//!     "umac-128-etm@openssh.com",
-//!     "hmac-sha2-256-etm@openssh.com",
-//!     "hmac-sha2-512-etm@openssh.com",
-//!     "hmac-sha1-etm@openssh.com",
-//!     "umac-64@openssh.com",
-//!     "umac-128@openssh.com",
-//!     "hmac-sha2-256",
-//!     "hmac-sha2-512",
-//!     "hmac-sha1",
-//!     "umac-64-etm@openssh.com",
-//!     "umac-128-etm@openssh.com",
-//!     "hmac-sha2-256-etm@openssh.com",
-//!     "hmac-sha2-512-etm@openssh.com",
-//!     "hmac-sha1-etm@openssh.com",
-//!     "umac-64@openssh.com",
-//!     "umac-128@openssh.com",
-//!     "hmac-sha2-256",
-//!     "hmac-sha2-512",
-//!     "hmac-sha1",
-//!     "none,zlib@openssh.com",
-//!     "none,zlib@openssh.com",
-//!
-//! mac:
-//!     "umac-64-etm@openssh.com",
-//!     "umac-128-etm@openssh.com",
-//!     "hmac-sha2-256-etm@openssh.com",
-//!     "hmac-sha2-512-etm@openssh.com",
-//!     "hmac-sha1-etm@openssh.com",
-//!     "umac-64@openssh.com",
-//!     "umac-128@openssh.com",
-//!     "hmac-sha2-256",
-//!     "hmac-sha2-512",
-//!     "hmac-sha1",
-//!
-//! pubkey_accepted_algorithms:
-//!     "ssh-ed25519-cert-v01@openssh.com",
-//!     "ecdsa-sha2-nistp256-cert-v01@openssh.com",
-//!     "ecdsa-sha2-nistp384-cert-v01@openssh.com",
-//!     "ecdsa-sha2-nistp521-cert-v01@openssh.com",
-//!     "sk-ssh-ed25519-cert-v01@openssh.com",
-//!     "sk-ecdsa-sha2-nistp256-cert-v01@openssh.com",
-//!     "rsa-sha2-512-cert-v01@openssh.com",
-//!     "rsa-sha2-256-cert-v01@openssh.com",
-//!     "ssh-ed25519",
-//!     "ecdsa-sha2-nistp256",
-//!     "ecdsa-sha2-nistp384",
-//!     "ecdsa-sha2-nistp521",
-//!     "sk-ssh-ed25519@openssh.com",
-//!     "sk-ecdsa-sha2-nistp256@openssh.com",
-//!     "rsa-sha2-512",
-//!     "rsa-sha2-256",
-//! ```
+//! When you invoke [`SshConfig::default`], the default algorithms are set from openssh source code,
+//! which can be seen in the [`default_openssh_algorithms`] function documentation.
 //!
 //! If you want you can use a custom constructor [`SshConfig::default_algorithms`] to set your own default algorithms.
 
@@ -249,7 +131,9 @@ mod parser;
 mod serializer;
 
 // -- export
-pub use self::default_algorithms::DefaultAlgorithms;
+pub use self::default_algorithms::{
+    DefaultAlgorithms, default_algorithms as default_openssh_algorithms,
+};
 pub use self::host::{Host, HostClause};
 pub use self::params::{Algorithms, AlgorithmsRule, HostParams};
 pub use self::parser::{ParseRule, SshParserError, SshParserResult};
@@ -457,5 +341,133 @@ mod tests {
             config.query("172.26.104.4"),
             HostParams::new(&DefaultAlgorithms::default())
         );
+    }
+
+    #[test]
+    fn roundtrip() {
+        test_log();
+
+        // Root host
+        let mut default_host_params = HostParams::new(&DefaultAlgorithms::default());
+        default_host_params.add_keys_to_agent = Some(true);
+        let root_host_config = Host::new(
+            vec![HostClause::new(String::from("*"), false)],
+            default_host_params,
+        );
+
+        // A host using proxy jumps
+        let mut host_params = HostParams::new(&DefaultAlgorithms::default());
+        host_params.host_name = Some(String::from("192.168.10.1"));
+        host_params.proxy_jump = Some(vec![String::from("jump.example.com")]);
+        let host_config = Host::new(
+            vec![HostClause::new(String::from("server"), false)],
+            host_params,
+        );
+
+        // Create the overall config and serialise it
+        let config = SshConfig::from_hosts(vec![root_host_config, host_config]);
+        let config_string = config.to_string();
+
+        // Parse the serialised string
+        let mut reader = std::io::BufReader::new(config_string.as_bytes());
+        let config_parsed = SshConfig::default()
+            .parse(&mut reader, ParseRule::STRICT)
+            .expect("Could not parse config.");
+
+        assert_eq!(config, config_parsed);
+    }
+
+    #[test]
+    fn should_get_intersecting_hosts() {
+        test_log();
+
+        let mut config = SshConfig::default();
+        let mut params1 = HostParams::new(&DefaultAlgorithms::default());
+        params1.bind_address = Some("0.0.0.0".to_string());
+        config.hosts.push(Host::new(
+            vec![HostClause::new(String::from("192.168.*.*"), false)],
+            params1,
+        ));
+        let mut params2 = HostParams::new(&DefaultAlgorithms::default());
+        params2.bind_interface = Some(String::from("tun0"));
+        config.hosts.push(Host::new(
+            vec![HostClause::new(String::from("192.168.10.*"), false)],
+            params2,
+        ));
+        let mut params3 = HostParams::new(&DefaultAlgorithms::default());
+        params3.host_name = Some("172.26.104.4".to_string());
+        config.hosts.push(Host::new(
+            vec![HostClause::new(String::from("172.26.*.*"), false)],
+            params3,
+        ));
+
+        // Test intersecting_hosts returns correct hosts
+        let matching: Vec<_> = config.intersecting_hosts("192.168.10.1").collect();
+        assert_eq!(matching.len(), 2);
+
+        let matching: Vec<_> = config.intersecting_hosts("192.168.1.1").collect();
+        assert_eq!(matching.len(), 1);
+
+        let matching: Vec<_> = config.intersecting_hosts("172.26.0.1").collect();
+        assert_eq!(matching.len(), 1);
+
+        // No matches
+        let matching: Vec<_> = config.intersecting_hosts("10.0.0.1").collect();
+        assert_eq!(matching.len(), 0);
+    }
+
+    #[test]
+    fn should_set_default_algorithms() {
+        test_log();
+
+        let custom_algos = DefaultAlgorithms {
+            ca_signature_algorithms: vec!["custom-algo".to_string()],
+            ciphers: vec!["custom-cipher".to_string()],
+            host_key_algorithms: vec!["custom-hostkey".to_string()],
+            kex_algorithms: vec!["custom-kex".to_string()],
+            mac: vec!["custom-mac".to_string()],
+            pubkey_accepted_algorithms: vec!["custom-pubkey".to_string()],
+        };
+
+        let config = SshConfig::default().default_algorithms(custom_algos.clone());
+
+        assert_eq!(config.default_algorithms, custom_algos);
+    }
+
+    #[test]
+    fn should_create_config_from_hosts() {
+        test_log();
+
+        let mut params = HostParams::new(&DefaultAlgorithms::default());
+        params.host_name = Some("example.com".to_string());
+        let host = Host::new(
+            vec![HostClause::new(String::from("example"), false)],
+            params,
+        );
+
+        let config = SshConfig::from_hosts(vec![host.clone()]);
+        assert_eq!(config.get_hosts().len(), 1);
+        assert_eq!(config.get_hosts()[0], host);
+    }
+
+    #[test]
+    fn should_query_empty_config() {
+        test_log();
+
+        let config = SshConfig::default();
+        let params = config.query("any-host");
+
+        // Should return default params
+        assert!(params.host_name.is_none());
+        assert!(params.port.is_none());
+    }
+
+    #[test]
+    fn should_display_empty_config() {
+        test_log();
+
+        let config = SshConfig::default();
+        let output = config.to_string();
+        assert!(output.is_empty());
     }
 }
